@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 INVALID_KEY_VALUES = {"", "your_actual_key", "your_key_here", "YOUR_GROQ_API_KEY"}
+DEFAULT_ANALYZE_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+DEFAULT_TEXT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 SYSTEM_PROMPT = (
     "You are an expert Radiology AI Assistant with deep knowledge in medical imaging analysis, trained to interpret X-rays, CT scans, MRI, and ultrasound images.\n\n"
@@ -167,10 +169,61 @@ def _build_client() -> Groq:
     return Groq()
 
 
-def _stream_chat_completion(client: Groq, messages: list) -> Generator[str, None, None]:
+def _available_model_ids(client: Groq) -> List[str]:
     try:
+        return [model.id for model in client.models.list().data]
+    except Exception:
+        return []
+
+
+def _is_general_chat_model(model_id: str) -> bool:
+    value = model_id.lower()
+    blocked = ("guard", "whisper", "tts", "transcribe")
+    return not any(tag in value for tag in blocked)
+
+
+def _pick_model(client: Groq, purpose: str) -> str:
+    available = _available_model_ids(client)
+
+    if purpose == "analyze":
+        env_model = (os.getenv("GROQ_ANALYZE_MODEL") or "").strip()
+        preferred = [
+            env_model,
+            DEFAULT_ANALYZE_MODEL,
+            "meta-llama/llama-4-maverick-17b-128e-instruct",
+        ]
+    else:
+        env_model = (os.getenv("GROQ_TEXT_MODEL") or "").strip()
+        preferred = [
+            env_model,
+            DEFAULT_TEXT_MODEL,
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+        ]
+
+    preferred = [model_id for model_id in preferred if model_id]
+
+    for model_id in preferred:
+        if not available or model_id in available:
+            return model_id
+
+    for model_id in available:
+        if "llama-4" in model_id.lower() and _is_general_chat_model(model_id):
+            return model_id
+
+    for model_id in available:
+        if _is_general_chat_model(model_id):
+            return model_id
+
+    return preferred[0] if preferred else DEFAULT_TEXT_MODEL
+
+
+def _stream_chat_completion(
+    client: Groq, messages: list, model: str, fallback_model: str = ""
+) -> Generator[str, None, None]:
+    def _stream_with_model(model_id: str) -> Generator[str, None, None]:
         completion = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model=model_id,
             messages=messages,
             temperature=1,
             max_completion_tokens=1024,
@@ -186,9 +239,38 @@ def _stream_chat_completion(client: Groq, messages: list) -> Generator[str, None
                 payload = json.dumps({"chunk": chunk_text.replace("\r", "")}, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
 
+    try:
+        yield from _stream_with_model(model)
+
         yield "data: [DONE]\n\n"
     except Exception as exc:
-        error_message = str(exc).replace("\n", " ")
+        error_text = str(exc).replace("\n", " ")
+
+        can_retry = (
+            fallback_model
+            and fallback_model != model
+            and (
+                "does not exist" in error_text.lower()
+                or "do not have access" in error_text.lower()
+                or "not found" in error_text.lower()
+            )
+        )
+
+        if can_retry:
+            try:
+                yield from _stream_with_model(fallback_model)
+                yield "data: [DONE]\n\n"
+                return
+            except Exception as fallback_exc:
+                error_text = str(fallback_exc).replace("\n", " ")
+
+        if "does not exist" in error_text.lower() or "do not have access" in error_text.lower():
+            error_text = (
+                "Configured Groq model is unavailable for this API key. "
+                "Set GROQ_ANALYZE_MODEL or GROQ_TEXT_MODEL to an accessible model in deployment env."
+            )
+
+        error_message = error_text
         payload = json.dumps({"error": error_message}, ensure_ascii=False)
         yield f"data: {payload}\n\n"
         yield "data: [DONE]\n\n"
@@ -216,6 +298,8 @@ def health() -> dict:
 @app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...), context: str = Form(default="")) -> StreamingResponse:
     client = _build_client()
+    model = _pick_model(client, "analyze")
+    fallback_model = _pick_model(client, "text")
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided.")
@@ -248,13 +332,14 @@ async def analyze(file: UploadFile = File(...), context: str = Form(default=""))
         },
     ]
 
-    return _sse_response(_stream_chat_completion(client, messages))
+    return _sse_response(_stream_chat_completion(client, messages, model, fallback_model))
 
 
 @app.post("/symptoms")
 @app.post("/api/symptoms")
 async def analyze_symptoms(payload: SymptomsRequest) -> StreamingResponse:
     client = _build_client()
+    model = _pick_model(client, "text")
     user_text = (
         f"Symptoms: {payload.symptoms}\n"
         f"Age: {payload.age}\n"
@@ -266,13 +351,14 @@ async def analyze_symptoms(payload: SymptomsRequest) -> StreamingResponse:
         {"role": "system", "content": SYMPTOMS_SYSTEM_PROMPT},
         {"role": "user", "content": user_text},
     ]
-    return _sse_response(_stream_chat_completion(client, messages))
+    return _sse_response(_stream_chat_completion(client, messages, model))
 
 
 @app.post("/medicine")
 @app.post("/api/medicine")
 async def medicine_info(payload: MedicineRequest) -> StreamingResponse:
     client = _build_client()
+    model = _pick_model(client, "text")
     user_text = (
         f"Medicine name: {payload.medicine_name}\n"
         "Return complete medicine information in the requested structured format."
@@ -281,13 +367,14 @@ async def medicine_info(payload: MedicineRequest) -> StreamingResponse:
         {"role": "system", "content": MEDICINE_SYSTEM_PROMPT},
         {"role": "user", "content": user_text},
     ]
-    return _sse_response(_stream_chat_completion(client, messages))
+    return _sse_response(_stream_chat_completion(client, messages, model))
 
 
 @app.post("/chat")
 @app.post("/api/chat")
 async def health_chat(payload: ChatRequest) -> StreamingResponse:
     client = _build_client()
+    model = _pick_model(client, "text")
     messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
     for message in payload.messages:
         role = message.role.strip().lower()
@@ -303,4 +390,4 @@ async def health_chat(payload: ChatRequest) -> StreamingResponse:
             }
         )
 
-    return _sse_response(_stream_chat_completion(client, messages))
+    return _sse_response(_stream_chat_completion(client, messages, model))

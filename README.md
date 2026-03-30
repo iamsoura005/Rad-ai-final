@@ -35,6 +35,10 @@ This repository is configured for single-project Vercel deployment:
 Required Vercel Environment Variables:
 - `GROQ_API_KEY`
 
+Optional Vercel Environment Variables (recommended):
+- `GROQ_ANALYZE_MODEL` (example: `meta-llama/llama-4-scout-17b-16e-instruct`)
+- `GROQ_TEXT_MODEL` (example: `meta-llama/llama-4-scout-17b-16e-instruct`)
+
 Deploy steps:
 1. Push this repository to GitHub.
 2. Import the repository in Vercel.
