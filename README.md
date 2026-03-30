@@ -50,5 +50,9 @@ API endpoints in production:
 Important files for deployment:
 - `vercel.json`
 - `api/index.py`
+- `api/[...path].py`
 - `api/requirements.txt`
 - `frontend/.env.example`
+
+Production routing note:
+- Backend supports both `/analyze` and `/api/analyze` style paths (same for all endpoints) for compatibility across local and Vercel runtimes.

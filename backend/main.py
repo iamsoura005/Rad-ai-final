@@ -207,11 +207,13 @@ def _sse_response(stream: Generator[str, None, None]) -> StreamingResponse:
 
 
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
 
 
 @app.post("/analyze")
+@app.post("/api/analyze")
 async def analyze(file: UploadFile = File(...), context: str = Form(default="")) -> StreamingResponse:
     client = _build_client()
 
@@ -250,6 +252,7 @@ async def analyze(file: UploadFile = File(...), context: str = Form(default=""))
 
 
 @app.post("/symptoms")
+@app.post("/api/symptoms")
 async def analyze_symptoms(payload: SymptomsRequest) -> StreamingResponse:
     client = _build_client()
     user_text = (
@@ -267,6 +270,7 @@ async def analyze_symptoms(payload: SymptomsRequest) -> StreamingResponse:
 
 
 @app.post("/medicine")
+@app.post("/api/medicine")
 async def medicine_info(payload: MedicineRequest) -> StreamingResponse:
     client = _build_client()
     user_text = (
@@ -281,6 +285,7 @@ async def medicine_info(payload: MedicineRequest) -> StreamingResponse:
 
 
 @app.post("/chat")
+@app.post("/api/chat")
 async def health_chat(payload: ChatRequest) -> StreamingResponse:
     client = _build_client()
     messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
