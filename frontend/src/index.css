@@ -1,0 +1,156 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Inter", sans-serif;
+  background:
+    radial-gradient(50rem 26rem at 0% -10%, rgba(14, 116, 144, 0.2), transparent 60%),
+    radial-gradient(30rem 20rem at 100% 0%, rgba(37, 99, 235, 0.2), transparent 65%),
+    linear-gradient(160deg, #030712 0%, #020617 45%, #030712 100%);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Inter", sans-serif;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.25);
+}
+
+pre {
+  margin: 0;
+  font-family: "Inter", sans-serif;
+}
+
+.hero-mesh::before,
+.hero-mesh::after {
+  content: "";
+  position: absolute;
+  inset: auto;
+  border-radius: 9999px;
+  filter: blur(60px);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.hero-mesh::before {
+  width: 360px;
+  height: 360px;
+  left: -80px;
+  top: 10%;
+  background: #06b6d4;
+  animation: float-orb 11s ease-in-out infinite;
+}
+
+.hero-mesh::after {
+  width: 340px;
+  height: 340px;
+  right: -80px;
+  top: 20%;
+  background: #2563eb;
+  animation: float-orb 14s ease-in-out infinite reverse;
+}
+
+.ecg-line {
+  opacity: 0.9;
+  animation: pulse-line 3.5s linear infinite;
+}
+
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #67e8f9;
+  animation: dot-pop 1s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.chat-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.5) rgba(17, 24, 39, 0.6);
+}
+
+@keyframes float-orb {
+  0%,
+  100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-24px) scale(1.08);
+  }
+}
+
+@keyframes pulse-line {
+  0% {
+    transform: translateX(-2%);
+  }
+  50% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(2%);
+  }
+}
+
+@keyframes dot-pop {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  header,
+  footer,
+  aside,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  .scan-print-report {
+    display: block !important;
+  }
+
+  .scan-print-report > * {
+    border-color: #d1d5db !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    box-shadow: none !important;
+  }
+}
