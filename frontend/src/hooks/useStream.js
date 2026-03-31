@@ -3,12 +3,14 @@ import { streamSSE } from "../utils/api";
 
 function useStream(defaultUrl, defaultOptions = {}) {
   const [text, setText] = useState("");
+  const [meta, setMeta] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState("");
   const abortRef = useRef(null);
 
   const reset = useCallback(() => {
     setText("");
+    setMeta(null);
     setError("");
   }, []);
 
@@ -29,6 +31,7 @@ function useStream(defaultUrl, defaultOptions = {}) {
       const controller = new AbortController();
       abortRef.current = controller;
       setText("");
+      setMeta(null);
       setError("");
       setIsStreaming(true);
 
@@ -47,6 +50,12 @@ function useStream(defaultUrl, defaultOptions = {}) {
           onError: (errMsg) => {
             setError(typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg));
           },
+          onData: (payload) => {
+            if (!payload || typeof payload !== "object") return;
+            if (payload.meta) {
+              setMeta(payload.meta);
+            }
+          },
         });
       } catch (err) {
         if (err?.name !== "AbortError") {
@@ -63,6 +72,7 @@ function useStream(defaultUrl, defaultOptions = {}) {
 
   return {
     text,
+    meta,
     isStreaming,
     error,
     start,

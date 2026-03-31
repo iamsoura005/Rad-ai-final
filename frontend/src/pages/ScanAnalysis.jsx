@@ -49,11 +49,12 @@ function ScanAnalysis() {
   const [hasRun, setHasRun] = useState(false);
   const [history, setHistory] = useLocalStorage(historyKey, []);
 
-  const { text, isStreaming, error, start, reset } = useStream("http://localhost:8000/analyze", {
+  const { text, meta, isStreaming, error, start, reset } = useStream("http://localhost:8000/analyze", {
     method: "POST",
   });
 
   const parsed = useMemo(() => parseAnalysis(text), [text]);
+  const analysisAssets = meta?.type === "analysis_assets" ? meta : null;
 
   useEffect(() => {
     if (!isStreaming && hasRun && text.trim()) {
@@ -290,6 +291,18 @@ function ScanAnalysis() {
                   {parsed.recommendation}
                 </div>
               </motion.div>
+
+              {analysisAssets?.heatmap && (
+                <motion.div variants={{ hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }} className={sectionCardClass()}>
+                  <h3 className="mb-2 text-white">Region-Focused Heatmap</h3>
+                  <img src={analysisAssets.heatmap} alt="Region focused heatmap" className="max-h-[460px] w-full rounded-xl object-contain" />
+                  <p className="mt-2 text-xs text-gray-400">
+                    Regions: {Array.isArray(analysisAssets.regions) && analysisAssets.regions.length
+                      ? analysisAssets.regions.join(", ")
+                      : "none"}
+                  </p>
+                </motion.div>
+              )}
 
               <DisclaimerBanner text="⚠️ This is an AI-assisted analysis and not a medical diagnosis." />
 

@@ -2,7 +2,7 @@ import base64
 import json
 import mimetypes
 import os
-from typing import Generator, List
+from typing import Callable, Dict, Generator, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -10,6 +10,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
 from pydantic import BaseModel, Field
+
+try:
+    from .region_parser import extract_region, extract_region_weights, infer_intensity_from_report
+    from .smart_heatmap import (
+        bgr_image_to_base64_png,
+        decode_upload_to_bgr,
+        generate_region_based_cam,
+        overlay_heatmap,
+    )
+except ImportError:
+    from region_parser import extract_region, extract_region_weights, infer_intensity_from_report
+    from smart_heatmap import (
+        bgr_image_to_base64_png,
+        decode_upload_to_bgr,
+        generate_region_based_cam,
+        overlay_heatmap,
+    )
 
 load_dotenv()
 
@@ -51,6 +68,8 @@ SYSTEM_PROMPT = (
     "   - (0–100%)\n\n"
     "8. Recommendation:\n"
     "   - Suggest if further tests or expert consultation is needed (NO treatment advice)\n\n"
+    "9. Detected Region:\n"
+    "   - Include one final line exactly as: Detected Region: <region name or none>\n\n"
     "SAFETY:\n"
     "- Always include: \"This is an AI-assisted analysis and not a medical diagnosis.\"\n"
     "- Avoid definitive claims unless very clear.\n"
@@ -219,9 +238,14 @@ def _pick_model(client: Groq, purpose: str) -> str:
 
 
 def _stream_chat_completion(
-    client: Groq, messages: list, model: str, fallback_model: str = ""
+    client: Groq,
+    messages: list,
+    model: str,
+    fallback_model: str = "",
+    post_payload_builder: Optional[Callable[[str], Optional[Dict]]] = None,
 ) -> Generator[str, None, None]:
-    def _stream_with_model(model_id: str) -> Generator[str, None, None]:
+    def _stream_with_model(model_id: str) -> Generator[str, None, str]:
+        report_chunks: List[str] = []
         completion = client.chat.completions.create(
             model=model_id,
             messages=messages,
@@ -236,11 +260,24 @@ def _stream_chat_completion(
             delta = chunk.choices[0].delta
             chunk_text = getattr(delta, "content", None)
             if chunk_text:
-                payload = json.dumps({"chunk": chunk_text.replace("\r", "")}, ensure_ascii=False)
+                clean_chunk = chunk_text.replace("\r", "")
+                report_chunks.append(clean_chunk)
+                payload = json.dumps({"chunk": clean_chunk}, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
 
+        return "".join(report_chunks)
+
     try:
-        yield from _stream_with_model(model)
+        report_text = yield from _stream_with_model(model)
+
+        if post_payload_builder:
+            try:
+                post_payload = post_payload_builder(report_text)
+                if post_payload:
+                    payload = json.dumps(post_payload, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
+            except Exception:
+                pass
 
         yield "data: [DONE]\n\n"
     except Exception as exc:
@@ -258,7 +295,17 @@ def _stream_chat_completion(
 
         if can_retry:
             try:
-                yield from _stream_with_model(fallback_model)
+                report_text = yield from _stream_with_model(fallback_model)
+
+                if post_payload_builder:
+                    try:
+                        post_payload = post_payload_builder(report_text)
+                        if post_payload:
+                            payload = json.dumps(post_payload, ensure_ascii=False)
+                            yield f"data: {payload}\n\n"
+                    except Exception:
+                        pass
+
                 yield "data: [DONE]\n\n"
                 return
             except Exception as fallback_exc:
@@ -332,7 +379,45 @@ async def analyze(file: UploadFile = File(...), context: str = Form(default=""))
         },
     ]
 
-    return _sse_response(_stream_chat_completion(client, messages, model, fallback_model))
+    def _build_analysis_assets(report_text: str) -> Optional[Dict]:
+        if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+            return None
+
+        try:
+            original_img = decode_upload_to_bgr(file_bytes)
+            region_weights = extract_region_weights(report_text)
+            regions = sorted(region_weights.keys(), key=lambda key: region_weights[key], reverse=True)
+            intensity = infer_intensity_from_report(report_text)
+            cam = generate_region_based_cam(
+                original_img.shape,
+                regions,
+                intensity=intensity,
+                region_weights=region_weights,
+            )
+            heatmap_img = overlay_heatmap(original_img, cam)
+            heatmap_b64 = bgr_image_to_base64_png(heatmap_img)
+        except Exception:
+            return None
+
+        return {
+            "meta": {
+                "type": "analysis_assets",
+                "regions": regions,
+                "region_weights": region_weights,
+                "intensity": intensity,
+                "heatmap": f"data:image/png;base64,{heatmap_b64}",
+            }
+        }
+
+    return _sse_response(
+        _stream_chat_completion(
+            client,
+            messages,
+            model,
+            fallback_model,
+            post_payload_builder=_build_analysis_assets,
+        )
+    )
 
 
 @app.post("/symptoms")

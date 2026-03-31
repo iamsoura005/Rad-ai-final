@@ -20,7 +20,7 @@ function detailToMessage(detail) {
   return JSON.stringify(detail);
 }
 
-export async function streamSSE({ url, options = {}, onChunk, onError }) {
+export async function streamSSE({ url, options = {}, onChunk, onError, onData }) {
   const response = await fetch(url, options);
   if (!response.ok) {
     let errorMsg = `Request failed (${response.status})`;
@@ -74,6 +74,8 @@ export async function streamSSE({ url, options = {}, onChunk, onError }) {
             onChunk?.(parsed.chunk);
             continue;
           }
+          onData?.(parsed);
+          continue;
         } catch {
           // Fall through to plain text handling.
         }
