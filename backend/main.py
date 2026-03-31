@@ -13,20 +13,29 @@ from pydantic import BaseModel, Field
 
 try:
     from .region_parser import extract_region, extract_region_weights, infer_intensity_from_report
-    from .smart_heatmap import (
-        bgr_image_to_base64_png,
-        decode_upload_to_bgr,
-        generate_region_based_cam,
-        overlay_heatmap,
-    )
 except ImportError:
     from region_parser import extract_region, extract_region_weights, infer_intensity_from_report
-    from smart_heatmap import (
-        bgr_image_to_base64_png,
-        decode_upload_to_bgr,
-        generate_region_based_cam,
-        overlay_heatmap,
-    )
+
+HEATMAP_IMPORT_ERROR = ""
+HEATMAP_AVAILABLE = True
+try:
+    try:
+        from .smart_heatmap import (
+            bgr_image_to_base64_png,
+            decode_upload_to_bgr,
+            generate_region_based_cam,
+            overlay_heatmap,
+        )
+    except ImportError:
+        from smart_heatmap import (
+            bgr_image_to_base64_png,
+            decode_upload_to_bgr,
+            generate_region_based_cam,
+            overlay_heatmap,
+        )
+except Exception as heatmap_exc:
+    HEATMAP_AVAILABLE = False
+    HEATMAP_IMPORT_ERROR = str(heatmap_exc)
 
 load_dotenv()
 
@@ -380,6 +389,14 @@ async def analyze(file: UploadFile = File(...), context: str = Form(default=""))
     ]
 
     def _build_analysis_assets(report_text: str) -> Optional[Dict]:
+        if not HEATMAP_AVAILABLE:
+            return {
+                "meta": {
+                    "type": "analysis_assets_unavailable",
+                    "reason": "heatmap_dependencies_unavailable",
+                }
+            }
+
         if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
             return None
 
