@@ -40,8 +40,27 @@ function sectionCardClass() {
   return "rounded-2xl border border-gray-800 bg-gray-900 p-4 transition hover:border-cyan-500/40";
 }
 
+function validateAnalysisAssetsMeta(meta) {
+  if (!meta || meta.type !== "analysis_assets") {
+    return { valid: false, missing: ["analysis_assets_meta"] };
+  }
+
+  const missing = [];
+
+  if (typeof meta.prediction_class !== "number" || Number.isNaN(meta.prediction_class)) {
+    missing.push("prediction_class");
+  }
+
+  if (typeof meta.heatmap !== "string" || !meta.heatmap.startsWith("data:image/")) {
+    missing.push("heatmap");
+  }
+
+  return { valid: missing.length === 0, missing };
+}
+
 function ScanAnalysis() {
   const inputRef = useRef(null);
+  const hasLoggedMetaWarningRef = useRef(false);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState("");
   const [dragActive, setDragActive] = useState(false);
@@ -73,6 +92,36 @@ function ScanAnalysis() {
     }
   }, [hasRun, isStreaming, parsed.confidenceScore, parsed.imageType, parsed.raw, parsed.regionAnalyzed, parsed.severity, setHistory, text]);
 
+  useEffect(() => {
+    if (!hasRun || isStreaming || !meta || hasLoggedMetaWarningRef.current) {
+      return;
+    }
+
+    if (meta.type === "analysis_assets") {
+      const validation = validateAnalysisAssetsMeta(meta);
+      if (!validation.valid) {
+        console.warn("[RadiologyAI] Grad-CAM meta validation warning", {
+          event: "analysis_assets_validation_failed",
+          missing_fields: validation.missing,
+          received_meta_keys: Object.keys(meta),
+          timestamp: new Date().toISOString(),
+        });
+      }
+      hasLoggedMetaWarningRef.current = true;
+      return;
+    }
+
+    if (meta.type === "analysis_assets_unavailable") {
+      console.warn("[RadiologyAI] Grad-CAM assets unavailable", {
+        event: "analysis_assets_unavailable",
+        reason: meta.reason || "unknown",
+        detail: meta.detail || "",
+        timestamp: new Date().toISOString(),
+      });
+      hasLoggedMetaWarningRef.current = true;
+    }
+  }, [hasRun, isStreaming, meta]);
+
   const selectFile = (nextFile) => {
     if (!nextFile) return;
     setFile(nextFile);
@@ -84,12 +133,14 @@ function ScanAnalysis() {
 
   const onAnalyze = async () => {
     if (!file) return;
+    hasLoggedMetaWarningRef.current = false;
     setHasRun(true);
     const req = buildAnalyzeRequest(file, context);
     await start(req);
   };
 
   const clearFile = () => {
+    hasLoggedMetaWarningRef.current = false;
     setFile(null);
     setContext("");
     reset();

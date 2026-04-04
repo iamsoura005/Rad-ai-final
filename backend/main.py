@@ -1,38 +1,49 @@
 import base64
+import io
 import json
 import mimetypes
 import os
-from typing import Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from groq import Groq
+from PIL import Image
 from pydantic import BaseModel, Field
 
 try:
-    from .region_parser import extract_region, extract_region_weights, infer_intensity_from_report
+    from .region_parser import extract_region
 except ImportError:
-    from region_parser import extract_region, extract_region_weights, infer_intensity_from_report
+    from region_parser import extract_region
 
 HEATMAP_IMPORT_ERROR = ""
 HEATMAP_AVAILABLE = True
+GRADCAM_ENGINE = None
+GRADCAM_MODEL_INFO: Dict[str, Any] = {}
+GRADCAM_STARTUP_READY = False
+GRADCAM_STARTUP_ERROR = ""
 try:
     try:
-        from .smart_heatmap import (
+        from .gradcam import GradCAM
+        from .heatmap import (
             bgr_image_to_base64_png,
             decode_upload_to_bgr,
-            generate_region_based_cam,
-            overlay_heatmap,
+            apply_heatmap,
         )
+        from .model import ACTIVE_MODEL_INFO, model as heatmap_model, preprocess, target_layer
     except ImportError:
-        from smart_heatmap import (
+        from gradcam import GradCAM
+        from heatmap import (
             bgr_image_to_base64_png,
             decode_upload_to_bgr,
-            generate_region_based_cam,
-            overlay_heatmap,
+            apply_heatmap,
         )
+        from model import ACTIVE_MODEL_INFO, model as heatmap_model, preprocess, target_layer
+
+    GRADCAM_ENGINE = GradCAM(heatmap_model, target_layer)
+    GRADCAM_MODEL_INFO = dict(ACTIVE_MODEL_INFO)
 except Exception as heatmap_exc:
     HEATMAP_AVAILABLE = False
     HEATMAP_IMPORT_ERROR = str(heatmap_exc)
@@ -344,10 +355,54 @@ def _sse_response(stream: Generator[str, None, None]) -> StreamingResponse:
     )
 
 
+def _run_gradcam_probe() -> Tuple[bool, str]:
+    if not HEATMAP_AVAILABLE or GRADCAM_ENGINE is None:
+        return False, HEATMAP_IMPORT_ERROR or "Grad-CAM engine is unavailable."
+
+    try:
+        probe = Image.new("RGB", (224, 224), color=(127, 127, 127))
+        probe_bytes = io.BytesIO()
+        probe.save(probe_bytes, format="PNG")
+
+        input_tensor = preprocess(io.BytesIO(probe_bytes.getvalue()))
+        cam, class_idx = GRADCAM_ENGINE.generate(input_tensor)
+        if cam.size == 0:
+            return False, "Grad-CAM output is empty."
+
+        GRADCAM_MODEL_INFO["probe_prediction_class"] = int(class_idx)
+        GRADCAM_MODEL_INFO["probe_cam_shape"] = [int(dim) for dim in cam.shape]
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
 @app.get("/health")
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+def _startup_gradcam_probe() -> None:
+    global GRADCAM_STARTUP_READY, GRADCAM_STARTUP_ERROR
+    GRADCAM_STARTUP_READY, GRADCAM_STARTUP_ERROR = _run_gradcam_probe()
+
+
+@app.get("/gradcam-health")
+@app.get("/api/gradcam-health")
+def gradcam_health() -> dict:
+    ready = HEATMAP_AVAILABLE and GRADCAM_ENGINE is not None and GRADCAM_STARTUP_READY
+    payload = {
+        "status": "ok" if ready else "degraded",
+        "gradcam_ready": ready,
+        "startup_probe_ready": GRADCAM_STARTUP_READY,
+        "model": GRADCAM_MODEL_INFO,
+    }
+    if HEATMAP_IMPORT_ERROR:
+        payload["import_error"] = HEATMAP_IMPORT_ERROR
+    if GRADCAM_STARTUP_ERROR:
+        payload["startup_probe_error"] = GRADCAM_STARTUP_ERROR
+    return payload
 
 
 @app.post("/analyze")
@@ -389,11 +444,12 @@ async def analyze(file: UploadFile = File(...), context: str = Form(default=""))
     ]
 
     def _build_analysis_assets(report_text: str) -> Optional[Dict]:
-        if not HEATMAP_AVAILABLE:
+        if not HEATMAP_AVAILABLE or GRADCAM_ENGINE is None:
             return {
                 "meta": {
                     "type": "analysis_assets_unavailable",
-                    "reason": "heatmap_dependencies_unavailable",
+                    "reason": "gradcam_dependencies_unavailable",
+                    "detail": HEATMAP_IMPORT_ERROR,
                 }
             }
 
@@ -402,26 +458,20 @@ async def analyze(file: UploadFile = File(...), context: str = Form(default=""))
 
         try:
             original_img = decode_upload_to_bgr(file_bytes)
-            region_weights = extract_region_weights(report_text)
-            regions = sorted(region_weights.keys(), key=lambda key: region_weights[key], reverse=True)
-            intensity = infer_intensity_from_report(report_text)
-            cam = generate_region_based_cam(
-                original_img.shape,
-                regions,
-                intensity=intensity,
-                region_weights=region_weights,
-            )
-            heatmap_img = overlay_heatmap(original_img, cam)
+            input_tensor = preprocess(io.BytesIO(file_bytes))
+            cam, class_idx = GRADCAM_ENGINE.generate(input_tensor)
+            heatmap_img = apply_heatmap(original_img, cam)
             heatmap_b64 = bgr_image_to_base64_png(heatmap_img)
+            regions = extract_region(report_text)
         except Exception:
             return None
 
         return {
             "meta": {
                 "type": "analysis_assets",
+                "prediction_class": int(class_idx),
+                "model_backend": GRADCAM_MODEL_INFO.get("backend"),
                 "regions": regions,
-                "region_weights": region_weights,
-                "intensity": intensity,
                 "heatmap": f"data:image/png;base64,{heatmap_b64}",
             }
         }
