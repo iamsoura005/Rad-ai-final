@@ -39,16 +39,6 @@ Optional Vercel Environment Variables (recommended):
 - `GROQ_ANALYZE_MODEL` (example: `meta-llama/llama-4-scout-17b-16e-instruct`)
 - `GROQ_TEXT_MODEL` (example: `meta-llama/llama-4-scout-17b-16e-instruct`)
 
-Optional Grad-CAM Model Environment Variables:
-- `GRADCAM_MODEL_BACKEND`:
-	- `torchvision_densenet121` (default)
-	- `torchvision_resnet50`
-	- `torchxrayvision_densenet`
-- `GRADCAM_XRV_WEIGHTS` (used only for `torchxrayvision_densenet`, default: `densenet121-res224-all`)
-
-If using TorchXRayVision backend, install:
-- `pip install torchxrayvision`
-
 Deploy steps:
 1. Push this repository to GitHub.
 2. Import the repository in Vercel.
@@ -57,7 +47,6 @@ Deploy steps:
 
 API endpoints in production:
 - `/api/analyze`
-- `/api/gradcam-health`
 - `/api/symptoms`
 - `/api/medicine`
 - `/api/chat`

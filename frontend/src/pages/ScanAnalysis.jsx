@@ -358,6 +358,7 @@ function ScanAnalysis() {
               <DisclaimerBanner text="⚠️ This is an AI-assisted analysis and not a medical diagnosis." />
 
               <div className="print:hidden flex flex-wrap gap-2">
+
                 <button
                   type="button"
                   onClick={copyReport}
